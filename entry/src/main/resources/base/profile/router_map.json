@@ -1,0 +1,20 @@
+{
+  "routerMap": [
+    {
+      "name": "downloading",
+      "pageSourceFile": "src/main/ets/pages/DownloadingPage.ets",
+      "buildFunction": "DownloadingPageBuilder",
+      "data": {
+        "description": "下载中：章节缓存任务队列（下载中/已完成两段）"
+      }
+    },
+    {
+      "name": "localcomic",
+      "pageSourceFile": "src/main/ets/pages/LocalComicPage.ets",
+      "buildFunction": "LocalComicPageBuilder",
+      "data": {
+        "description": "本地漫画：已缓存章节列表，离线阅读与删除"
+      }
+    }
+  ]
+}
