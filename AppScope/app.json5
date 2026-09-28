@@ -1,6 +1,6 @@
 {
   "app": {
-    "bundleName": "app.cimoc.com",
+    "bundleName": "com.march.cimoc",
     "vendor": "example",
     "versionCode": 1001000,
     "versionName": "1.1.0",
