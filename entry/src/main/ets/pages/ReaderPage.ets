@@ -8,6 +8,7 @@ import { Comic, Chapter, ImageInfo, ReaderArgs } from '../model/Model';
 import { ComicService } from '../service/ComicService';
 import { ImageLoader } from '../image/ImageLoader';
 import { Prefs, PrefKeys } from '../data/Prefs';
+import { LocalProgress } from '../data/LocalProgress';
 import { HttpHeader } from '../network/HttpClient';
 import { SourceManager } from '../source/SourceManager';
 import Theme from '../common/Theme';
@@ -156,6 +157,9 @@ export struct ReaderPage {
   private referer: string = '';
   // 离线锁定（"本地"页进入）：图片只允许本地文件，禁止网络回退
   private localOnly: boolean = false;
+  // 本地阅读进度（Preferences，与联网进度独立）：进入时载入，用于恢复定位
+  private localLast: string = '';
+  private localPage: number = 0;
   private service: ComicService | null = null;
   private scroller: Scroller = new Scroller();
   private win: window.Window | null = null;
@@ -182,7 +186,8 @@ export struct ReaderPage {
     Prefs.getBool(ctx, PrefKeys.READER_KEEP_ON, true).then((on: boolean) => {
       this.keepScreenOn(on);
     });
-    // 窗口全屏布局：漫画内容真正画进状态栏/导航条区域，退出时恢复
+    // 窗口全屏布局：EntryAbility 已做全应用沉浸，这里重放一次仅作幂等兜底
+    // （异常设备上未生效时，下方容器的 expandSafeArea 仍会撑满安全区）
     window.getLastWindow(ctx).then((w: window.Window) => {
       this.win = w;
       this.readInsets(w);
@@ -203,7 +208,16 @@ export struct ReaderPage {
         this.referer = ref !== undefined ? ref : '';
       }
     }
-    this.loadChapter();
+    // 本地阅读：先取本地进度再加载章节（恢复定位要用）；联网阅读直接加载
+    if (this.localOnly) {
+      LocalProgress.load(ctx, this.comic.id).then((lp: LocalProgress): void => {
+        this.localLast = lp.path;
+        this.localPage = lp.page;
+        this.loadChapter();
+      });
+    } else {
+      this.loadChapter();
+    }
   }
 
   private keepScreenOn(on: boolean): void {
@@ -265,10 +279,24 @@ export struct ReaderPage {
     this.errorText = '';
     this.images = [];
     try {
-      const imgs = await this.service.loadChapterImages(this.comic, this.chapters[this.index], false, this.localOnly);
+      let imgs: ImageInfo[] | null;
+      try {
+        imgs = await this.service.loadChapterImages(this.comic, this.chapters[this.index], false, this.localOnly);
+      } catch (e) {
+        // 部分源按请求轮换章节 ID（如 92漫画 反爬模板），路径可能在解析后立刻失效：
+        // 重取详情页刷新章节列表并按标题回定当前章，路径有变化时重试一次
+        const healed = await this.resyncChapters();
+        if (!healed) {
+          throw e as Error;
+        }
+        imgs = await this.service.loadChapterImages(this.comic, this.chapters[this.index], false, this.localOnly);
+      }
       this.images = imgs;
-      const restorePage = this.chapters[this.index].path === this.comic.last && this.comic.page > 0
-        ? Math.min(this.comic.page - 1, Math.max(imgs.length - 1, 0)) : 0;
+      // 恢复定位：本地阅读用本地进度，联网阅读用 COMIC 表进度
+      const lastPath = this.localOnly ? this.localLast : this.comic.last;
+      const lastPage = this.localOnly ? this.localPage : this.comic.page;
+      const restorePage = this.chapters[this.index].path === lastPath && lastPage > 0
+        ? Math.min(lastPage - 1, Math.max(imgs.length - 1, 0)) : 0;
       if (this.pageMode === 1) {
         this.streamSource.refresh(imgs);
         // 等列表完成一次布局后再定位，首帧高度未定时直接滚会跳不准
@@ -281,6 +309,34 @@ export struct ReaderPage {
       this.errorText = e instanceof Error ? e.message : String(e);
     }
     this.loading = false;
+  }
+
+  /** 章节自愈：重取详情页全量同步章节列表，按标题（兜底索引）回定当前章；返回路径是否变化。 */
+  private async resyncChapters(): Promise<boolean> {
+    if (this.service === null || this.localOnly || this.comic.source === 0 || this.chapters.length === 0) {
+      return false;
+    }
+    const oldPath = this.chapters[this.index].path;
+    const oldTitle = this.chapters[this.index].title;
+    try {
+      const r = await this.service.getComicInfo(this.comic.source, this.comic.cid);
+      if (r === null || r[1].length === 0) {
+        return false;
+      }
+      this.comic = r[0];
+      this.chapters = r[1];
+      let ni = -1;
+      for (let i = 0; i < this.chapters.length; i++) {
+        if (this.chapters[i].title === oldTitle) {
+          ni = i;
+          break;
+        }
+      }
+      this.index = ni >= 0 ? ni : Math.min(this.index, this.chapters.length - 1);
+      return this.chapters[this.index].path !== oldPath;
+    } catch (e) {
+      return false;
+    }
   }
 
   /**
@@ -319,6 +375,12 @@ export struct ReaderPage {
       return;
     }
     const ch = this.chapters[this.index];
+    if (this.localOnly) {
+      // 本地阅读：进度写 Preferences，与联网进度（COMIC 表）互不覆盖
+      await LocalProgress.save(getContext(this) as common.UIAbilityContext,
+        this.comic.id, ch.path, ch.title, this.pageIndex + 1);
+      return;
+    }
     this.comic.last = ch.path;
     this.comic.chapter = ch.title;
     this.comic.page = this.pageIndex + 1;
@@ -357,18 +419,16 @@ export struct ReaderPage {
 
   aboutToDisappear(): void {
     this.stopClock();
-    // 退出阅读器恢复窗口安全区布局，并注销本页的避让区监听
+    // 仅注销本页的避让区监听；窗口保持全局沉浸（EntryAbility 统一管理），
+    // 不在此回退 setWindowLayoutFullScreen(false)——否则退出阅读器会把全 App 打回非沉浸
     if (this.win !== null) {
       if (this.avoidHandler !== null) {
         this.win.off('avoidAreaChange', this.avoidHandler);
         this.avoidHandler = null;
       }
-      this.win.setWindowLayoutFullScreen(false).catch(() => {
-        // ignore
-      });
       this.win = null;
     }
-    // 退出阅读器时进度/历史已落库，通知书库刷新
+    // 退出阅读器时进度已持久化（联网进 COMIC 表、本地进 Preferences），通知书库刷新
     this.saveProgress().then(() => {
       AppStorage.setOrCreate('library_dirty', Date.now());
     });

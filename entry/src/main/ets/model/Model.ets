@@ -22,6 +22,8 @@ export class Comic {
   local: boolean;
   localCover: string;   // 运行时字段：本地封面文件路径（不入库）
   localCount: number;   // 运行时字段：已完整缓存章节数（不入库），"本地"页展示用
+  localRead: string;      // 运行时字段：本地阅读进度·章节标题（不入库，与联网进度独立）
+  localReadPage: number;  // 运行时字段：本地阅读进度·页码（不入库）
 
   constructor(source: number, cid: string, title: string, cover: string = '',
               update: string = '', author: string = '') {
@@ -44,6 +46,8 @@ export class Comic {
     this.local = false;
     this.localCover = '';
     this.localCount = 0;
+    this.localRead = '';
+    this.localReadPage = 0;
   }
 
   setInfo(title: string, cover: string, update: string, intro: string,

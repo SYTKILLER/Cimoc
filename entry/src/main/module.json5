@@ -21,6 +21,13 @@
           "abilities": ["EntryAbility"],
           "when": "always"
         }
+      },
+      {
+        "name": "ohos.permission.DETECT_GESTURE",
+        "reason": "$string:permission_reason_DETECT_GESTURE",
+        "usedScene": {
+          "when": "inuse"
+        }
       }
     ],
     "abilities": [

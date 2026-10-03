@@ -4,6 +4,7 @@
 import { ChapterDao, ComicDao } from '../data/Daos';
 import { Chapter, Comic, DetailArgs, Task } from '../model/Model';
 import { DownloadManager } from '../download/DownloadManager';
+import { LocalProgress } from '../data/LocalProgress';
 import { Storage } from '../data/Storage';
 import Theme from '../common/Theme';
 import { common } from '@kit.AbilityKit';
@@ -53,6 +54,10 @@ export struct LocalLibraryPage {
         } catch (e) {
           c.localCount = 0;
         }
+        // 本地阅读进度（Preferences，独立于联网进度）：列表行「读到 X Pn」展示用，load 永不 reject
+        const lp = await LocalProgress.load(getContext(this) as common.UIAbilityContext, c.id);
+        c.localRead = lp.title;
+        c.localReadPage = lp.page;
         if (c.localCount > 0) {
           shown.push(c);
         }
@@ -135,8 +140,8 @@ export struct LocalLibraryPage {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .width('100%')
-        Text(c.history > 0 && c.chapter.length > 0
-          ? `已缓存 ${c.localCount} 章 · 读到 ${c.chapter}${c.page > 0 ? ` P${c.page}` : ''}`
+        Text(c.localRead.length > 0
+          ? `已缓存 ${c.localCount} 章 · 读到 ${c.localRead}${c.localReadPage > 0 ? ` P${c.localReadPage}` : ''}`
           : `已缓存 ${c.localCount} 章`)
           .fontSize(12)
           .fontColor($r('sys.color.font_secondary'))
@@ -155,6 +160,8 @@ export struct LocalLibraryPage {
     .padding(Theme.PAD_CARD)
     .borderRadius(Theme.RADIUS_ITEM)
     .backgroundColor($r('sys.color.comp_background_primary'))
+    .border(Theme.BORDER_HAIRLINE)
+    .shadow(Theme.CARD_SHADOW)
     .onClick(() => {
       this.openLocalDetail(c);
     })
@@ -198,6 +205,7 @@ export struct LocalLibraryPage {
     .padding(14)
     .borderRadius(Theme.RADIUS_CARD)
     .backgroundColor($r('sys.color.comp_background_primary'))
+    .border(Theme.BORDER_HAIRLINE)
     .shadow(Theme.CARD_SHADOW)
     .onClick(() => {
       this.navStack.pushPathByName('downloading', null);
@@ -239,7 +247,7 @@ export struct LocalLibraryPage {
               pressed: { .opacity(Theme.PRESS_OPACITY) },
               normal: { .opacity(1) }
             })
-          }, (c: Comic) => `local_${c.id}_${c.localCount}_${c.page}_${c.chapter}`)
+          }, (c: Comic) => `local_${c.id}_${c.localCount}_${c.localRead}_${c.localReadPage}`)
         }
         .width('100%')
         .layoutWeight(1)

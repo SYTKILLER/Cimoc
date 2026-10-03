@@ -108,6 +108,7 @@ export class Db {
       await store.executeSql('DELETE FROM IMAGE_URL WHERE COMIC_CHAPTER NOT IN (SELECT _id FROM CHAPTER)');
       await store.executeSql('DELETE FROM CHAPTER WHERE SOURCE_COMIC NOT IN (SELECT _id FROM COMIC)');
       await store.executeSql('DELETE FROM COMIC WHERE SOURCE = 999');
+      await store.executeSql('DELETE FROM TAG_REF WHERE CID NOT IN (SELECT _id FROM COMIC)');
     } catch (e) {
       // 清理失败不影响建库
     }

@@ -40,11 +40,18 @@ export class SourceConfig {
   readonly parseImageFaultImage: string;
   readonly parseImagePages: string;
   readonly imageServerUrl: string;
+  /** 站点目录新话在前（如瓜子漫画），解析后需反转再入库。 */
+  readonly chapterReverse: boolean;
+  /** 源站搜索结果已按相关度排序（如包子漫画），聚合搜索时本地保序混合排序。 */
+  readonly searchRanked: boolean;
+  /** 专用解析器种类（"dm5"：DM5 系 packer 图片脚本）；空=纯 CSS/正则配置。 */
+  readonly parserKind: string;
 
   constructor(key: string, type: number, title: string, obj: JsonObj) {
     this.key = key;
     this.type = type;
-    this.title = title;
+    const titleOverride = obj.optString('title');
+    this.title = titleOverride.length > 0 ? titleOverride : title;
     this.baseUrl = SourceConfig.trimSlash(obj.optString('baseUrl'));
     this.serverUrl = obj.optString('serverUrl');
     this.search = obj.optString('search');
@@ -75,6 +82,9 @@ export class SourceConfig {
     this.parseImagePages = obj.optString('parseImagePages');
     const isu = obj.optString('imageServerUrl');
     this.imageServerUrl = isu.length > 0 ? isu : this.serverUrl;
+    this.chapterReverse = obj.optString('chapterReverse') === 'true';
+    this.searchRanked = obj.optString('searchRanked') === 'true';
+    this.parserKind = obj.optString('parser');
   }
 
   static trimSlash(url: string): string {
@@ -108,6 +118,21 @@ export class GenericHtmlParser extends Parser {
     h.set('Referer', `${this.config.baseUrl}/`);
     h.set('User-Agent', GENERIC_UA);
     return h;
+  }
+
+  /** 站点目录新话在前时（chapterReverse: "true"），由 ComicService 反转后再入库。 */
+  isReverseOrder(): boolean {
+    return this.config.chapterReverse;
+  }
+
+  /** 站点主域（专用解析器子类构造接口 URL 用）。 */
+  getBaseUrl(): string {
+    return this.config.baseUrl;
+  }
+
+  /** 源站搜索已按相关度排序（searchRanked: "true"），聚合排序时该源结果保序。 */
+  isSearchRanked(): boolean {
+    return this.config.searchRanked;
   }
 
   private absUrl(path: string): string {
@@ -268,6 +293,13 @@ export class GenericHtmlParser extends Parser {
           path = h !== null && h.length > 0 ? h : (node.href() ?? '');
         }
         path = this.extractPath(path);
+        // 站点下发文档相对链接（如 92漫画 反爬轮换模板 "36284.html"）时，
+        // 依漫画 cid 目录补全为站点绝对路径，否则 absUrl 会错误拼到根路径
+        const cid = comic.cid;
+        if (path.length > 0 && !path.startsWith('/') && cid.length > 0) {
+          const dir = cid.endsWith('/') ? cid : cid.substring(0, cid.lastIndexOf('/') + 1);
+          path = dir + path;
+        }
         if (path.length === 0 || seen.has(path)) {
           continue;
         }
@@ -416,7 +448,7 @@ export class GenericHtmlParser extends Parser {
     return value.includes('(.*') || value.includes('(.+') || value.includes('=\\') || value.includes("='");
   }
 
-  private absImage(url: string): string {
+  protected absImage(url: string): string {
     url = url.trim();
     if (url.length === 0) {
       return '';
@@ -426,6 +458,12 @@ export class GenericHtmlParser extends Parser {
     }
     if (url.startsWith('//')) {
       return `https:${url}`;
+    }
+    // 配置了图片服务器时，站点相对路径优先拼图片域（如 92漫画 chapterImageHost），
+    // 未配置则回落主站；包子漫画全为绝对 URL，不受影响
+    if (url.startsWith('/') && this.config.imageServerUrl.length > 0) {
+      const server = this.config.imageServerUrl;
+      return server.endsWith('/') ? server + url.substring(1) : server + url;
     }
     if (url.startsWith('/')) {
       return this.config.baseUrl + url;

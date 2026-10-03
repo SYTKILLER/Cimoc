@@ -1,4 +1,4 @@
-/** 发现页：漫画源管理（启用/停用/左滑删除）。 */
+/** 发现页：漫画源管理（启用/停用/左滑删除），点击源进源站浏览器（ArkWeb）。 */
 
 import { SourceInfo } from '../model/Model';
 import { SourceDao } from '../data/Daos';
@@ -58,6 +58,11 @@ export struct ExplorePage {
     await this.sourceDao.delete(s.type);
     promptAction.showToast({ message: `已删除「${s.title}」，更新图源配置可找回` });
     this.reload();
+  }
+
+  /** 点击源：进入源站浏览器（ArkWeb 开源站首页，详情页链接拦截跳原生详情页）。 */
+  openBrowser(s: SourceInfo): void {
+    this.navStack.pushPathByName('sourcebrowser', s);
   }
 
   // 左滑露出的删除按钮
@@ -137,6 +142,15 @@ export struct ExplorePage {
             .padding(Theme.PAD_CARD)
             .borderRadius(Theme.RADIUS_ITEM)
             .backgroundColor($r('sys.color.comp_background_primary'))
+            .border(Theme.BORDER_HAIRLINE)
+            .shadow(Theme.ITEM_SHADOW)
+            .onClick(() => {
+              this.openBrowser(s);
+            })
+            .stateStyles({
+              pressed: { .opacity(Theme.PRESS_OPACITY) },
+              normal: { .opacity(1) }
+            })
           }
           .swipeAction({ end: this.deleteCell(s) })
         }, (s: SourceInfo) => `${s.type}_${s.enable ? 1 : 0}`)

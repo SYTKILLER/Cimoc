@@ -1,7 +1,7 @@
 /**
  * ImageLoader（对齐 Fresco 管线的最小完备实现）：
  * fetch bytes（带源 headers）→ ImageSource → PixelMap；内存 LRU + 磁盘缓存。
- * 阅读器后处理（白边/分屏/乱序还原）在此基础上于 M4+ 扩展。
+ * 阅读器后处理（分屏/乱序还原）可在此基础上于 M4+ 扩展。
  */
 
 import { image } from '@kit.ImageKit';

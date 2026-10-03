@@ -181,6 +181,13 @@ export class HttpClient {
       if (!hasUa) {
         headerRecord['User-Agent'] = DEFAULT_UA;
       }
+      // 补齐浏览器式基础头：Cloudflare 等反爬网关对缺失 Accept 系的裸请求更易人机判定
+      if (headerRecord['Accept'] === undefined) {
+        headerRecord['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8';
+      }
+      if (headerRecord['Accept-Language'] === undefined) {
+        headerRecord['Accept-Language'] = 'zh-CN,zh;q=0.9,en;q=0.8';
+      }
       const options: http.HttpRequestOptions = {
         method: http.RequestMethod.GET,
         header: headerRecord,

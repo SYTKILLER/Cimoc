@@ -7,7 +7,6 @@ export class PrefKeys {
   static readonly READER_MODE = 'pref_reader_mode';               // 0=翻页 1=条漫
   static readonly READER_PRELOAD = 'pref_reader_preload';
   static readonly READER_PRELOAD_COUNT = 'pref_reader_preload_count';
-  static readonly READER_WHITE_EDGE = 'pref_reader_white_edge';
   static readonly READER_BRIGHTNESS = 'pref_reader_brightness';
   static readonly READER_KEEP_ON = 'pref_reader_keep_on';
   static readonly READER_VOLUME_KEY = 'pref_reader_volume_key_controls_page_turning';
@@ -15,6 +14,7 @@ export class PrefKeys {
   static readonly NIGHT = 'pref_night';
   static readonly EXPLORE_SOURCE = 'pref_explore_source';
   static readonly SEARCH_HISTORY = 'pref_search_history';
+  static readonly SEARCH_HIDE_LOW_QUALITY = 'pref_search_hide_low_quality';
   static readonly DOWNLOAD_THREAD = 'pref_download_thread';
 }
 

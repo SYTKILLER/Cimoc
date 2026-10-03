@@ -16,11 +16,19 @@ export struct LibraryPage {
   @State histComics: Comic[] = [];
   // 收藏/进度等数据在详情页、阅读器中变更时置脏，本页无论是否可见都立即重载
   @StorageLink('library_dirty') @Watch('onDirty') dirty: number = 0;
+  // 底部页签切回"书库"时本组件不会重建（TabContent 常驻），靠 active_tab 感知重新可见并重载
+  @StorageLink('active_tab') @Watch('onTabEntered') activeTab: number = 0;
   private comicDao: ComicDao | null = null;
   private swiperController: SwiperController = new SwiperController();
 
   onDirty(): void {
     this.reload();
+  }
+
+  onTabEntered(): void {
+    if (this.activeTab === 0) {
+      this.reload();
+    }
   }
 
   aboutToAppear(): void {
@@ -127,7 +135,7 @@ export struct LibraryPage {
             pressed: { .opacity(Theme.PRESS_OPACITY) },
             normal: { .opacity(1) }
           })
-        }, (c: Comic) => `${keyPrefix}_${c.id}_${c.highlight ? 'h' : 'n'}_${c.page}`)
+        }, (c: Comic) => `${keyPrefix}_${c.id}_${c.highlight ? 'h' : 'n'}_${c.chapter}_${c.page}_${c.history}`)
       }
       .columnsTemplate(Theme.coverCols(this.bp))
       .columnsGap(10)

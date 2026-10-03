@@ -1,19 +1,25 @@
-/** 详情页：沉浸式头部 + 毛玻璃操作按钮 + 章节卡片网格。 */
+/** 详情页：沉浸式头部 + 智感握姿侧边胶囊（缓存/收藏，随左右手换边）+ 章节卡片网格。 */
 
 import { Comic, Chapter, ReaderArgs } from '../model/Model';
 import { ComicService } from '../service/ComicService';
 import { ComicDao } from '../data/Daos';
 import { DownloadManager } from '../download/DownloadManager';
+import { SourceManager } from '../source/SourceManager';
 import Theme from '../common/Theme';
+import { PageTitleBar } from '../common/PageTitleBar';
+import { shareComicText } from '../common/ShareUtil';
 import { promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import { hdsEffect } from '@kit.UIDesignKit';
 
 @Component
 export struct DetailPage {
   @Consume('nav') navStack: NavPathStack;
-  @StorageLink('topInset') topInset: number = 0;
   @StorageLink('bottomInset') bottomInset: number = 0;
   @StorageLink('bp') bp: string = 'sm';
+  // 智感握姿按钮位置（Index 唯一写入：0=右下默认位，2=左下）与窗口高度（vp），本页只读
+  @StorageLink('gripBtnPos') btnPos: number = 0;
+  @StorageLink('winHVp') winHVp: number = 0;
   @State comic: Comic = new Comic(0, '', '');
   @State chapters: Chapter[] = [];
   @State loading: boolean = true;
@@ -95,17 +101,37 @@ export struct DetailPage {
     return 0;
   }
 
-  continueReading(): void {
-    if (this.comic.last.length === 0) {
+  /** 分享链接：模型里没有 URL 字段，按源配置拼 baseUrl + cid（cid 已是绝对 URL 则原样）。 */
+  private buildShareUrl(): string {
+    if (this.comic.cid.length === 0) {
+      return '';
+    }
+    if (this.comic.cid.startsWith('http://') || this.comic.cid.startsWith('https://')) {
+      return this.comic.cid;
+    }
+    const cfg = SourceManager.get().getConfig(this.comic.source);
+    return cfg !== null && cfg.baseUrl.length > 0 ? cfg.baseUrl + this.comic.cid : '';
+  }
+
+  /** 右上角分享：`[标题][链接]` 文本交给系统分享面板。 */
+  private async shareComic(): Promise<void> {
+    const url = this.buildShareUrl();
+    if (url.length === 0) {
+      promptAction.showToast({ message: '无法生成分享链接' });
       return;
     }
+    await shareComicText(getContext(this) as common.UIAbilityContext, this.comic.title, url);
+  }
+
+  continueReading(): void {
     for (let i = 0; i < this.chapters.length; i++) {
       if (this.chapters[i].path === this.comic.last) {
         this.readChapter(this.chapters[i]);
         return;
       }
     }
-    // 记录章节已不存在（如历史残留行被同步清理）时回退第一章，避免按钮失效
+    // 无历史（last 为空）或记录章节已不存在（如历史残留行被同步清理）时回退第一章，
+    // 保证握姿胶囊阅读入口永远可用；进度仍由 readChapter 按真实打开写入，此处不预写记录
     if (this.chapters.length > 0) {
       this.readChapter(this.chapters[0]);
     }
@@ -181,41 +207,82 @@ export struct DetailPage {
     }
   }
 
+  /**
+   * 智感握姿侧边胶囊：缓存 + 收藏 + 继续阅读（竖式三动作，阅读入口在最下方）。
+   * 位置由根 Stack 的 alignContent 按握姿切换，
+   * 换边动画由 Index 统一驱动，此处零动画代码；图标直接读 @State 保证收藏态随状态刷新。
+   * 底色用系统毛玻璃材质（浅色下呈浅色磨砂、深色下呈深色磨砂），与返回键圆钮同款；
+   * 图标/分隔线用 sys.color 自适应资源，浅色模式下不再是深色块。
+   */
   @Builder
-  circleButton(icon: Resource, action: () => void) {
-    Row() {
-      SymbolGlyph(icon)
-        .fontSize(20)
-        .fontColor([$r('sys.color.font_primary')])
-    }
-    .width(38)
-    .height(38)
-    .borderRadius(Theme.RADIUS_PILL)
-    .backgroundBlurStyle(BlurStyle.Thin)
-    .backgroundColor('#33000000')
-    .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      action();
-    })
-  }
+  gripSideButton() {
+    Column({ space: 4 }) {
+      Row() {
+        SymbolGlyph($r('sys.symbol.download'))
+          .fontSize(24)
+          .fontColor([$r('sys.color.font_primary')])
+      }
+      .width(56)
+      .height(52)
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => {
+        this.openCacheSheet();
+      })
 
-  // 图标在 Builder 内部直接读取 @State，避免按值传参导致图标不随收藏状态刷新
-  @Builder
-  favButton() {
-    Row() {
-      SymbolGlyph(this.comic.favorite > 0 ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
-        .fontSize(20)
-        .fontColor([$r('sys.color.font_primary')])
+      Divider()
+        .strokeWidth(0.5)
+        .width(28)
+        .color($r('sys.color.comp_divider'))
+
+      Row() {
+        SymbolGlyph(this.comic.favorite > 0 ? $r('sys.symbol.heart_fill') : $r('sys.symbol.heart'))
+          .fontSize(24)
+          .fontColor([this.comic.favorite > 0 ? Theme.WARNING : $r('sys.color.font_primary')])
+      }
+      .width(56)
+      .height(52)
+      .justifyContent(FlexAlign.Center)
+      .borderRadius(26)
+      .backgroundColor(this.comic.favorite > 0 ? '#33FF9500' : Color.Transparent)
+      .onClick(() => {
+        this.toggleFavorite();
+      })
+
+      Divider()
+        .strokeWidth(0.5)
+        .width(28)
+        .color($r('sys.color.comp_divider'))
+
+      Row() {
+        SymbolGlyph($r('sys.symbol.book_badge_play'))
+          .fontSize(24)
+          .fontColor([Theme.ACCENT])
+      }
+      .width(56)
+      .height(52)
+      .justifyContent(FlexAlign.Center)
+      .onClick(() => {
+        this.continueReading();
+      })
     }
-    .width(38)
-    .height(38)
-    .borderRadius(Theme.RADIUS_PILL)
+    .alignItems(HorizontalAlign.Center)
+    .padding({ top: 4, bottom: 4 })
+    .width(60)
+    .borderRadius(30)
     .backgroundBlurStyle(BlurStyle.Thin)
     .backgroundColor('#33000000')
-    .justifyContent(FlexAlign.Center)
-    .onClick(() => {
-      this.toggleFavorite();
+    // 贴边一侧内收 PAD_PAGE：BottomEnd 对齐时负 x 向屏内推，换到 BottomStart 后对称
+    .offset({
+      x: this.btnPos === 0 ? -Theme.PAD_PAGE : Theme.PAD_PAGE,
+      y: -this.winHVp * 0.3
     })
+    // 智感光效：标识「会随握姿换边的活按钮」；收藏态靠心形颜色 + 底色高亮区分
+    .visualEffect(new hdsEffect.HdsEffectBuilder()
+      .pointLight({
+        sourceType: hdsEffect.PointLightSourceType.BRIGHT,
+        illuminatedType: hdsEffect.PointLightIlluminatedType.DEFAULT_FEATHERING_BORDER
+      })
+      .buildEffect())
   }
 
   // 缓存选择半模态面板：内容直接读 this.* 状态（@Builder 按值参数不会随状态刷新）。
@@ -303,209 +370,209 @@ export struct DetailPage {
   build() {
     NavDestination() {
       Stack() {
-        // 内容层
+        // 内容层：固定布局——页面本身不滚动（杜绝内容被划出屏幕外），
+        // 头部/简介常驻，章节 Grid 独占剩余高度自行滚动、容器直通屏幕底部
         Column() {
-          Scroll() {
-            Column() {
-              Row({ space: 14 }) {
-                Image(this.headerCoverSrc())
-                  .width(112)
-                  .height(152)
-                  .borderRadius(Theme.RADIUS_ITEM)
-                  .backgroundColor($r('sys.color.comp_background_tertiary'))
-                  .objectFit(ImageFit.Cover)
-                  .shadow(Theme.CARD_SHADOW)
+          // 自定义标题栏：内置标题栏在真机全屏下不避让状态栏（模拟器由 HDS 桥接兜底），
+          // 统一换成 PageTitleBar（topInset 补差，两端避让一致）
+          PageTitleBar({
+            title: this.comic.title.length > 0 ? this.comic.title : '详情',
+            onBack: (): void => {
+              this.navStack.pop(true);
+            },
+            menuIcon: $r('sys.symbol.share'),
+            onMenu: (): void => {
+              this.shareComic();
+            }
+          })
+          // 头部：封面 + 信息
+          Row({ space: 14 }) {
+            Image(this.headerCoverSrc())
+              .width(112)
+              .height(152)
+              .borderRadius(Theme.RADIUS_ITEM)
+              .backgroundColor($r('sys.color.comp_background_tertiary'))
+              .objectFit(ImageFit.Cover)
+              .shadow(Theme.CARD_SHADOW)
 
-                Column({ space: 6 }) {
-                  Text(this.comic.title.length > 0 ? this.comic.title : '加载中…')
-                    .fontSize(18)
-                    .fontWeight(FontWeight.Bold)
-                    .fontColor($r('sys.color.font_primary'))
-                    .maxLines(3)
-                  Text(`作者：${this.comic.author.length > 0 ? this.comic.author : '未知'}`)
-                    .fontSize(12)
-                    .fontColor($r('sys.color.font_secondary'))
-                    .maxLines(1)
-                  Row({ space: 8 }) {
-                    Text(this.comic.finish ? '已完结' : '连载中')
-                      .fontSize(10)
-                      .fontColor(this.comic.finish ? Theme.SUCCESS : Theme.WARNING)
-                      .padding({ left: 8, right: 8, top: 2, bottom: 2 })
-                      .borderRadius(Theme.RADIUS_PILL)
-                      .backgroundColor(this.comic.finish ? '#1A4CAF50' : '#1AFF9500')
-                    Text(`更新 ${this.comic.update.length > 0 ? this.comic.update : '—'}`)
-                      .fontSize(10)
-                      .fontColor($r('sys.color.font_tertiary'))
-                  }
-
-                  Row({ space: 8 }) {
-                    if (this.comic.last.length > 0) {
-                      Button('继续阅读')
-                        .type(ButtonType.Capsule)
-                        .fontSize(13)
-                        .height(34)
-                        .backgroundColor(Theme.ACCENT)
-                        .onClick(() => {
-                          this.continueReading();
-                        })
-                    }
-                    Button(this.comic.favorite > 0 ? '已收藏' : '收藏')
-                      .type(ButtonType.Capsule)
-                      .fontSize(13)
-                      .height(34)
-                      .fontColor(this.comic.favorite > 0 ? $r('sys.color.font_primary') : Color.White)
-                      .backgroundColor(this.comic.favorite > 0 ? $r('sys.color.comp_background_tertiary') : Theme.WARNING)
-                      .onClick(() => {
-                        this.toggleFavorite();
-                      })
-                  }
-                }
-                .alignItems(HorizontalAlign.Start)
-                .layoutWeight(1)
+            Column({ space: 6 }) {
+              Text(this.comic.title.length > 0 ? this.comic.title : '加载中…')
+                .fontSize(18)
+                .fontWeight(FontWeight.Bold)
+                .fontColor($r('sys.color.font_primary'))
+                .maxLines(3)
+              Text(`作者：${this.comic.author.length > 0 ? this.comic.author : '未知'}`)
+                .fontSize(12)
+                .fontColor($r('sys.color.font_secondary'))
+                .maxLines(1)
+              Row({ space: 8 }) {
+                Text(this.comic.finish ? '已完结' : '连载中')
+                  .fontSize(10)
+                  .fontColor(this.comic.finish ? Theme.SUCCESS : Theme.WARNING)
+                  .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+                  .borderRadius(Theme.RADIUS_PILL)
+                  .backgroundColor(this.comic.finish ? '#1A4CAF50' : '#1AFF9500')
+                Text(`更新 ${this.comic.update.length > 0 ? this.comic.update : '—'}`)
+                  .fontSize(10)
+                  .fontColor($r('sys.color.font_tertiary'))
               }
+
+              Row({ space: 8 }) {
+                if (this.comic.last.length > 0) {
+                  Button('继续阅读')
+                    .type(ButtonType.Capsule)
+                    .fontSize(13)
+                    .height(34)
+                    .backgroundColor(Theme.ACCENT)
+                    .onClick(() => {
+                      this.continueReading();
+                    })
+                }
+                Button(this.comic.favorite > 0 ? '已收藏' : '收藏')
+                  .type(ButtonType.Capsule)
+                  .fontSize(13)
+                  .height(34)
+                  .fontColor(this.comic.favorite > 0 ? $r('sys.color.font_primary') : Color.White)
+                  .backgroundColor(this.comic.favorite > 0 ? $r('sys.color.comp_background_tertiary') : Theme.WARNING)
+                  .onClick(() => {
+                    this.toggleFavorite();
+                  })
+              }
+            }
+            .alignItems(HorizontalAlign.Start)
+            .layoutWeight(1)
+          }
+          .padding({
+            left: Theme.pagePad(this.bp),
+            right: Theme.pagePad(this.bp),
+            top: 12,
+            bottom: 12
+          })
+          .width('100%')
+
+          if (this.comic.intro.length > 0) {
+            Text(this.comic.intro)
+              .fontSize(12)
+              .fontColor($r('sys.color.font_secondary'))
+              .lineHeight(18)
+              .maxLines(3)
               .padding({
                 left: Theme.pagePad(this.bp),
                 right: Theme.pagePad(this.bp),
-                top: 52 + this.topInset,
-                bottom: 12
+                bottom: 10
               })
               .width('100%')
-
-              if (this.comic.intro.length > 0) {
-                Text(this.comic.intro)
-                  .fontSize(12)
-                  .fontColor($r('sys.color.font_secondary'))
-                  .lineHeight(18)
-                  .maxLines(3)
-                  .padding({
-                    left: Theme.pagePad(this.bp),
-                    right: Theme.pagePad(this.bp),
-                    bottom: 10
-                  })
-                  .width('100%')
-              }
-
-              if (this.loading) {
-                Column({ space: 10 }) {
-                  LoadingProgress().width(36).height(36).color(Theme.ACCENT)
-                  Text('正在加载章节…')
-                    .fontSize(12)
-                    .fontColor($r('sys.color.font_tertiary'))
-                }
-                .margin({ top: 50 })
-                .width('100%')
-              } else if (this.errorText.length > 0) {
-                Column({ space: 10 }) {
-                  SymbolGlyph($r('sys.symbol.exclamationmark_triangle'))
-                    .fontSize(40)
-                    .fontColor([$r('sys.color.font_fourth')])
-                  Text(`加载失败：${this.errorText}`)
-                    .fontSize(12)
-                    .fontColor(Theme.DANGER)
-                    .textAlign(TextAlign.Center)
-                    .maxLines(3)
-                  Button('重试')
-                    .type(ButtonType.Capsule)
-                    .backgroundColor(Theme.ACCENT)
-                    .onClick(() => {
-                      this.fetch(this.comic.source, this.comic.cid);
-                    })
-                }
-                .margin({ top: 40, left: 24, right: 24 })
-                .width('100%')
-              } else {
-                // 章节标题行
-                Row() {
-                  Text(`章节 · ${this.chapters.length}`)
-                    .fontSize(14)
-                    .fontWeight(FontWeight.Medium)
-                    .fontColor($r('sys.color.font_primary'))
-                  Blank()
-                  Text(this.asc ? '正序 ↑' : '倒序 ↓')
-                    .fontSize(12)
-                    .fontColor(Theme.ACCENT)
-                    .padding({ left: 10, right: 10, top: 4, bottom: 4 })
-                    .borderRadius(Theme.RADIUS_PILL)
-                    .backgroundColor($r('sys.color.comp_background_tertiary'))
-                    .onClick(() => {
-                      this.asc = !this.asc;
-                    })
-                }
-                .padding({
-                  left: Theme.pagePad(this.bp),
-                  right: Theme.pagePad(this.bp),
-                  top: 4,
-                  bottom: 8
-                })
-                .width('100%')
-
-                Grid() {
-                  ForEach(this.orderedChapters(), (ch: Chapter) => {
-                    GridItem() {
-                      Column({ space: 3 }) {
-                        Text(`${ch.group === '默认' ? '' : ch.group + ' · '}${ch.title}`)
-                          .width('100%')
-                          .fontSize(12)
-                          .maxLines(1)
-                          .textAlign(TextAlign.Start)
-                          .textOverflow({ overflow: TextOverflow.Ellipsis })
-                          .fontColor(ch.path === this.comic.last ? Theme.ACCENT : $r('sys.color.font_primary'))
-                      }
-                      .width('100%')
-                      .padding({ left: 6, right: 6 })
-                      .justifyContent(FlexAlign.Center)
-                      .height(44)
-                      .borderRadius(Theme.RADIUS_SMALL)
-                      .backgroundColor(ch.path === this.comic.last ? Theme.ACCENT_SOFT : $r('sys.color.comp_background_primary'))
-                      .onClick(() => {
-                        this.readChapter(ch);
-                      })
-                    }
-                    .stateStyles({
-                      pressed: { .opacity(Theme.PRESS_OPACITY) },
-                      normal: { .opacity(1) }
-                    })
-                  }, (ch: Chapter) => `${ch.id}_${ch.path}_${this.asc ? 1 : 0}`)
-                }
-                .columnsTemplate(Theme.chapterCols(this.bp))
-                .columnsGap(8)
-                .rowsGap(8)
-                .padding({
-                  left: Theme.pagePad(this.bp),
-                  right: Theme.pagePad(this.bp),
-                  bottom: 30 + this.bottomInset
-                })
-                .height('100%')
-              }
-            }
           }
-          .layoutWeight(1)
-          .scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.Spring)
+
+          if (this.loading) {
+            Column({ space: 10 }) {
+              LoadingProgress().width(36).height(36).color(Theme.ACCENT)
+              Text('正在加载章节…')
+                .fontSize(12)
+                .fontColor($r('sys.color.font_tertiary'))
+            }
+            .justifyContent(FlexAlign.Center)
+            .layoutWeight(1)
+            .width('100%')
+          } else if (this.errorText.length > 0) {
+            Column({ space: 10 }) {
+              SymbolGlyph($r('sys.symbol.exclamationmark_triangle'))
+                .fontSize(40)
+                .fontColor([$r('sys.color.font_fourth')])
+              Text(`加载失败：${this.errorText}`)
+                .fontSize(12)
+                .fontColor(Theme.DANGER)
+                .textAlign(TextAlign.Center)
+                .maxLines(3)
+              Button('重试')
+                .type(ButtonType.Capsule)
+                .backgroundColor(Theme.ACCENT)
+                .onClick(() => {
+                  this.fetch(this.comic.source, this.comic.cid);
+                })
+            }
+            .justifyContent(FlexAlign.Center)
+            .layoutWeight(1)
+            .width('100%')
+          } else {
+            // 章节标题行（固定，不随列表滚动）
+            Row() {
+              Text(`章节 · ${this.chapters.length}`)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .fontColor($r('sys.color.font_primary'))
+              Blank()
+              Text(this.asc ? '正序 ↑' : '倒序 ↓')
+                .fontSize(12)
+                .fontColor(Theme.ACCENT)
+                .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+                .borderRadius(Theme.RADIUS_PILL)
+                .backgroundColor($r('sys.color.comp_background_tertiary'))
+                .onClick(() => {
+                  this.asc = !this.asc;
+                })
+            }
+            .padding({
+              left: Theme.pagePad(this.bp),
+              right: Theme.pagePad(this.bp),
+              top: 4,
+              bottom: 8
+            })
+            .width('100%')
+
+            // 章节网格：layoutWeight(1) 通到屏幕底部，滚动只发生在 Grid 内部
+            Grid() {
+              ForEach(this.orderedChapters(), (ch: Chapter) => {
+                GridItem() {
+                  Column({ space: 3 }) {
+                    Text(`${ch.group === '默认' ? '' : ch.group + ' · '}${ch.title}`)
+                      .width('100%')
+                      .fontSize(12)
+                      .maxLines(1)
+                      .textAlign(TextAlign.Start)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                      .fontColor(ch.path === this.comic.last ? Theme.ACCENT : $r('sys.color.font_primary'))
+                  }
+                  .width('100%')
+                  .padding({ left: 6, right: 6 })
+                  .justifyContent(FlexAlign.Center)
+                  .height(44)
+                  .borderRadius(Theme.RADIUS_SMALL)
+                  .backgroundColor(ch.path === this.comic.last ? Theme.ACCENT_SOFT : $r('sys.color.comp_background_primary'))
+                  .border(Theme.BORDER_HAIRLINE)
+                  .shadow({ radius: 6, color: '#14000000', offsetY: 2 })
+                  .onClick(() => {
+                    this.readChapter(ch);
+                  })
+                }
+                .stateStyles({
+                  pressed: { .opacity(Theme.PRESS_OPACITY) },
+                  normal: { .opacity(1) }
+                })
+              }, (ch: Chapter) => `${ch.id}_${ch.path}_${this.asc ? 1 : 0}`)
+            }
+            .columnsTemplate(Theme.chapterCols(this.bp))
+            .columnsGap(8)
+            .rowsGap(8)
+            .padding({
+              left: Theme.pagePad(this.bp),
+              right: Theme.pagePad(this.bp),
+              bottom: 16 + this.bottomInset
+            })
+            .layoutWeight(1)
+            .scrollBar(BarState.Off)
+            .edgeEffect(EdgeEffect.Spring)
+          }
         }
         .width('100%')
         .height('100%')
 
-        // 顶部浮动按钮（毛玻璃）
-        Row() {
-          this.circleButton($r('sys.symbol.chevron_left'), (): void => {
-            this.navStack.pop();
-          })
-          Blank()
-          Row({ space: 10 }) {
-            this.circleButton($r('sys.symbol.download'), (): void => {
-              this.openCacheSheet();
-            })
-            this.favButton()
-          }
-        }
-        .padding({ left: Theme.PAD_PAGE, right: Theme.PAD_PAGE, top: 10 + this.topInset })
-        .width('100%')
-        .alignItems(VerticalAlign.Top)
+        // 智感握姿侧边胶囊：根 Stack 全屏 + alignContent 随握姿在右下/左下间切换
+        this.gripSideButton()
       }
       .width('100%')
       .height('100%')
-      .alignContent(Alignment.Top)
+      .alignContent(this.btnPos === 0 ? Alignment.BottomEnd : Alignment.BottomStart)
       .bindSheet(this.sheetShow, this.cacheSheetBuilder(), {
         height: SheetSize.MEDIUM,
         detents: [SheetSize.MEDIUM, SheetSize.LARGE],
@@ -514,7 +581,8 @@ export struct DetailPage {
         onDisappear: (): void => {
           this.sheetShow = false;
         }
-      })    }
+      })
+    }
     .hideTitleBar(true)
     .backgroundColor($r('sys.color.background_primary'))
   }

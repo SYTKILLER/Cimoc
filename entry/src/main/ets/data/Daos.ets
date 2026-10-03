@@ -165,6 +165,45 @@ export class ComicDao {
     }
   }
 
+  /**
+   * 备份导入专用（仅 Backup 链路使用，不走 updateOrDelete 的三态清行语义）：
+   * 本地不存在 → 插入（download/local 归零，设备本地下载态不随备份迁移）；
+   * 已存在 → 'newer' 只动 FAVORITE/HISTORY/进度列并逐字段取较新时间戳（进度跟随 HISTORY 胜负），
+   * 'fill' 不动已有条目。DOWNLOAD/LOCAL 永不触碰，返回是否实际写库。
+   */
+  async importComic(comic: Comic, policy: string): Promise<boolean> {
+    const existing = await this.load(comic.source, comic.cid);
+    if (existing === null) {
+      comic.download = 0;
+      comic.local = false;
+      await this.insertOrReplace(comic);
+      return true;
+    }
+    if (policy === 'fill') {
+      return false;
+    }
+    const favNewer = comic.favorite > existing.favorite;
+    const hisNewer = comic.history > existing.history;
+    if (!favNewer && !hisNewer) {
+      return false;
+    }
+    const favFinal = favNewer ? comic.favorite : existing.favorite;
+    const hisFinal = hisNewer ? comic.history : existing.history;
+    const row: relationalStore.ValuesBucket = {
+      'FAVORITE': favFinal > 0 ? favFinal : null,
+      'HISTORY': hisFinal > 0 ? hisFinal : null,
+      'LAST': hisNewer ? comic.last : existing.last,
+      'PAGE': hisNewer ? comic.page : existing.page,
+      'CHAPTER': hisNewer ? comic.chapter : existing.chapter,
+      'HIGHLIGHT': hisNewer ? (comic.highlight ? 1 : 0) : (existing.highlight ? 1 : 0),
+    };
+    const pred = new relationalStore.RdbPredicates('COMIC');
+    pred.equalTo('_id', existing.id);
+    const s = await this.store();
+    await s.update(row, pred);
+    return true;
+  }
+
   async cancelHighlight(comic: Comic): Promise<void> {
     comic.highlight = false;
     const store = await this.store();

@@ -141,6 +141,11 @@ export abstract class Parser {
     return false;
   }
 
+  /** 源站搜索结果是否已按相关度排序（聚合搜索时保序混合排序）。 */
+  isSearchRanked(): boolean {
+    return false;
+  }
+
   protected static isFinishText(text: string | null): boolean {
     return StringUtils.isFinish(text);
   }

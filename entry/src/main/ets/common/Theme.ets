@@ -41,9 +41,9 @@ export default class Theme {
   }
 
   /**
-   * 悬浮页签栏底部避让总高 = 底部安全区(无指示器时 16) + 栏高 56 + 12vp 呼吸空间。
-   * 可滚动列表用作 contentEndOffset（滚动途中内容穿过栏下，滚到底时最后一项完整露出）；
-   * 静态页面用作 padding.bottom。
+   * 悬浮页签栏底部避让总高 = 导航条高度(取不到时 16) + 栏高 56 + 12vp 呼吸空间。
+   * 可滚动列表用作 contentEndOffset（滚动途中内容穿过栏下，滚到底时最后一项露出在胶囊上方 12vp）；
+   * 静态页面用作 padding.bottom。与 Index 的 barBottomMargin 同一取值公式，几何保持自洽。
    */
   static floatTabBarAvoid(bottomInset: number): number {
     return (bottomInset > 0 ? bottomInset : 16) + Theme.FLOATING_BAR_HEIGHT + 12;
@@ -67,5 +67,18 @@ export default class Theme {
     radius: 16,
     color: '#14000000',
     offsetY: 2,
+  };
+
+  /** 行内格子阴影：与详情页章节格子同一观感（轻于 CARD_SHADOW） */
+  static readonly ITEM_SHADOW: ShadowOptions = {
+    radius: 6,
+    color: '#14000000',
+    offsetY: 2,
+  };
+
+  /** 发丝线描边：0.5vp，弱于分割线观感，仅给卡片/格子做轮廓提示 */
+  static readonly BORDER_HAIRLINE: BorderOptions = {
+    width: 0.5,
+    color: $r('sys.color.comp_divider'),
   };
 }

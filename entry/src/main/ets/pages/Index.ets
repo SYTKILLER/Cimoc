@@ -7,9 +7,11 @@ import { SearchPage } from './SearchPage';
 import { ProfilePage } from './ProfilePage';
 import { DetailPage } from './DetailPage';
 import { ReaderPage } from './ReaderPage';
-import { SymbolGlyphModifier, window } from '@kit.ArkUI';
+import { SymbolGlyphModifier, window, curves } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { HdsTabs, HdsTabsController, hdsMaterial } from '@kit.UIDesignKit';
+import { motion } from '@kit.MultimodalAwarenessKit';
+import { HoldingHandleUtil } from '../common/HoldingHandleUtil';
 
 interface TabItem {
   title: string;
@@ -17,14 +19,25 @@ interface TabItem {
   selected: Resource;
 }
 
+// 握持状态须稳定保持该时长才换边，过滤系统左右手判定抖动（holdingHandChanged 高频抖动会导致按钮左右横跳）
+const HOLDING_STABLE_MS = 500;
+
 @Entry
 @Component
 struct Index {
   @Provide('nav') navStack: NavPathStack = new NavPathStack();
   @StorageLink('topInset') topInset: number = 0;
   @StorageLink('bottomInset') bottomInset: number = 0;
-  @State activeTab: number = 0;
+  // EntryAbility 全屏切换完成后广播（insetEpoch 变化）：此刻的避让值才是新鲜值。
+  // 启动时 Index 在 loadContent 期间就读过一次 insets（早于全屏生效），
+  // 桥接系统上全屏后状态栏避让会归 0，不重读会导致主页顶部双重避让
+  @StorageProp('insetEpoch') @Watch('onInsetEpoch') insetEpoch: number = 0;
+  // 活动页签写入 AppStorage（'active_tab'）：TabContent 组件常驻不重建，
+  // 各页签页靠 @StorageLink @Watch 感知"自己重新可见"以便每次进入都重载最新数据
+  @StorageLink('active_tab') activeTab: number = 0;
   private tabsController: HdsTabsController = new HdsTabsController();
+  // 待生效的换边定时器（-1 表示无）
+  private holdDebounceTimer: number = -1;
 
   private tabs: TabItem[] = [
     { title: '书库', normal: $r('sys.symbol.book'), selected: $r('sys.symbol.book_open_fill') },
@@ -36,6 +49,10 @@ struct Index {
 
   aboutToAppear(): void {
     this.tabsController.changeIndex(this.activeTab);
+    // 智感握姿：订阅系统左右手握持事件（不支持的设备内部静默降级，按钮停在默认右下）
+    HoldingHandleUtil.start((status: motion.HoldingHandStatus) => {
+      this.handleHoldingStatusChange(status);
+    });
     // 安全区内边距（vp）与窗口断点写入 AppStorage：悬浮页签 barBottomMargin、
     // 各页面避让与栅格列数都从这里取
     window.getLastWindow(getContext(this) as common.UIAbilityContext).then((w: window.Window) => {
@@ -46,6 +63,15 @@ struct Index {
     });
   }
 
+  aboutToDisappear(): void {
+    // 丢弃尚未生效的换边 + 停止握持订阅，防泄漏与销毁后误落位
+    if (this.holdDebounceTimer !== -1) {
+      clearTimeout(this.holdDebounceTimer);
+      this.holdDebounceTimer = -1;
+    }
+    HoldingHandleUtil.stop();
+  }
+
   private readInsets(w: window.Window): void {
     const sys = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
     const nav = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR);
@@ -54,11 +80,60 @@ struct Index {
     AppStorage.setOrCreate('bottomInset', ui.px2vp(nav.bottomRect.height));
   }
 
+  /** 全屏切换生效后重读安全区（EntryAbility 广播），替换启动早期的陈旧避让值。 */
+  onInsetEpoch(): void {
+    window.getLastWindow(getContext(this) as common.UIAbilityContext).then((w: window.Window) => {
+      this.readInsets(w);
+    });
+  }
+
   private readBreakpoint(w: window.Window): void {
-    const widthVp = this.getUIContext().px2vp(w.getWindowProperties().windowRect.width);
+    const rect = w.getWindowProperties().windowRect;
+    const widthVp = this.getUIContext().px2vp(rect.width);
+    // 窗口高度（vp）写入 AppStorage：详情页侧边按钮的垂直定位按屏高百分比取值
+    AppStorage.setOrCreate('winHVp', this.getUIContext().px2vp(rect.height));
     // 规范断点：<600 sm / 600–840 md / ≥840 lg
     const bp = widthVp >= 840 ? 'lg' : (widthVp >= 600 ? 'md' : 'sm');
     AppStorage.setOrCreate('bp', bp);
+  }
+
+  /**
+   * 智感握姿策略层（全局唯一写入点）：握持状态 → 按钮落位。
+   * 左手 → 2（左下），右手/未握持 → 0（右下默认位）；双手捧机最易误触发，保持原位不换边。
+   * 写 AppStorage 'gripBtnPos'，消费页面（详情页侧边按钮）经 @StorageLink 自动响应刷新。
+   */
+  private handleHoldingStatusChange(status: motion.HoldingHandStatus): void {
+    // 每个事件先取消未生效的换边：只有连续 HOLDING_STABLE_MS 保持不变的状态才落位
+    if (this.holdDebounceTimer !== -1) {
+      clearTimeout(this.holdDebounceTimer);
+      this.holdDebounceTimer = -1;
+    }
+    let target = 0;
+    switch (status) {
+      case motion.HoldingHandStatus.LEFT_HAND_HELD:
+        target = 2;
+        break;
+      case motion.HoldingHandStatus.BOTH_HANDS_HELD:
+        return;
+      case motion.HoldingHandStatus.RIGHT_HAND_HELD:
+      case motion.HoldingHandStatus.NOT_HELD:
+      default:
+        target = 0;
+        break;
+    }
+    if (target === (AppStorage.get<number>('gripBtnPos') ?? 0)) {
+      return;
+    }
+    this.holdDebounceTimer = setTimeout(() => {
+      this.holdDebounceTimer = -1;
+      if (target === (AppStorage.get<number>('gripBtnPos') ?? 0)) {
+        return;
+      }
+      // 动画包在状态赋值外面，消费页面靠 @StorageLink 自动获得弹簧换边过渡，页面侧零动画代码
+      this.getUIContext().animateTo({ duration: 350, curve: curves.springMotion() }, () => {
+        AppStorage.setOrCreate('gripBtnPos', target);
+      });
+    }, HOLDING_STABLE_MS);
   }
 
   @Builder
@@ -128,8 +203,9 @@ struct Index {
       .barOverlap(true)
       .vertical(false)
       .barFloatingStyle({
-        // 贴近屏幕底部：固定小边距（沉浸式下内容本就画到物理底缘，不需要整体抬到导航条上方）
-        barBottomMargin: 8,
+        // 沉浸式下胶囊须避开底部导航条：直接用导航条高度（TYPE_NAVIGATION_INDICATOR，
+        // avoidAreaChange 实时维护），取不到时 16vp 兜底；列表 contentEndOffset 用 floatTabBarAvoid 与此几何配套
+        barBottomMargin: this.bottomInset > 0 ? this.bottomInset : 16,
         // HdsTabs 默认在页签区域叠加一层通栏白色渐变遮罩（默认高度 = 页签栏高 + 32vp），
         // 把划过栏下的内容洗成白色，看起来就是「白色遮罩挡住页面底部内容」。
         // 显式给透明色即可关闭；该字段不能省略——省略即恢复默认白色遮罩
@@ -151,10 +227,14 @@ struct Index {
       .height('100%')
       // 顶部避让状态栏；底部不做整体 padding，避让交给各列表 contentEndOffset（内容穿过栏下）
       .padding({ top: this.topInset })
+      // 兜底：setWindowLayoutFullScreen 未生效时仍把页签铺进上下安全区
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .navDestination(this.PageMap)
     .hideTitleBar(true)
     .mode(NavigationMode.Stack)
     .backgroundColor($r('sys.color.background_primary'))
+    // 主题底色铺到物理底缘：底部导航条区域不再露窗口底色（悬浮胶囊经 barBottomMargin 自行避开导航条）
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
   }
 }

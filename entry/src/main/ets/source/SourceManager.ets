@@ -1,13 +1,13 @@
 /**
  * SourceManager：源注册表 + Parser 实例缓存（对齐 data/SourceManager.java + SourceConfigManager.java）。
- * - 内置分析器：CopyMH(26)（MH517 已随源失效移除）
  * - 配置化源：从 source_catalog.json（rawfile 内置，可远程覆盖）加载，固定编号 200-219，
  *   其余键按 Java String.hashCode 哈希到 300-9299，保证与 CimocPlus 数据互通。
+ * - CopyMH(26) 已废弃（站点强制登陆无法阅读），随 20260926 版本清扫自动停用。
  */
 
 import { Parser } from './Parser';
-import { CopyMangaParser } from './CopyManga';
 import { GenericHtmlParser, SourceConfig } from './SourceConfig';
+import { Dm5Parser } from './Dm5Parser';
 import { SourceInfo } from '../model/Model';
 import { JsonObj } from '../common/Json';
 import { Prefs } from '../data/Prefs';
@@ -44,7 +44,7 @@ GENERIC_ITEMS.set('FEIXUEMH', new ItemMeta(203, '飞雪漫画'));
 GENERIC_ITEMS.set('MANHUAWU', new ItemMeta(204, '漫画屋'));
 GENERIC_ITEMS.set('YEMANMH', new ItemMeta(205, '野蛮漫画'));
 GENERIC_ITEMS.set('HAOMAN8', new ItemMeta(206, '好漫8'));
-GENERIC_ITEMS.set('HAOMAN6', new ItemMeta(207, '好漫6'));
+GENERIC_ITEMS.set('HAOMAN6', new ItemMeta(207, '漫本'));
 GENERIC_ITEMS.set('MITUI', new ItemMeta(208, '米推漫画'));
 GENERIC_ITEMS.set('MH360', new ItemMeta(209, '360漫画'));
 GENERIC_ITEMS.set('BMG', new ItemMeta(210, '百漫谷'));
@@ -57,6 +57,7 @@ GENERIC_ITEMS.set('IQIYI', new ItemMeta(216, '爱奇艺漫画'));
 GENERIC_ITEMS.set('BOLEFU', new ItemMeta(217, '博乐福'));
 GENERIC_ITEMS.set('QIXIMH', new ItemMeta(218, '七夕漫画'));
 GENERIC_ITEMS.set('ZERO', new ItemMeta(219, 'Zero'));
+GENERIC_ITEMS.set('GUAZIMH', new ItemMeta(220, '瓜子漫画'));
 
 /** 固定编号键的旧名别名（同站旧域名/旧配置键，对齐 aliasOf）。 */
 const ALIAS_KEYS: Map<string, string> = new Map();
@@ -290,7 +291,7 @@ export class SourceManager {
   }
 
   /**
-   * 目录版本门控的一次性清扫：目录更新后，不在「目录 ∪ 内置解析器(26)」的已启用源自动停用。
+   * 目录版本门控的一次性清扫：目录更新后，不在当前目录内的已启用源自动停用（含废弃的 CopyMH(26)）。
    * 只停用不删除——删除永远是用户在发现页左滑主动执行。
    * 版本只前进（新于已清扫版本才执行），避免导入旧目录（如归档）后反向触发。
    */
@@ -303,7 +304,6 @@ export class SourceManager {
       return;
     }
     const protectedTypes: Set<number> = new Set();
-    protectedTypes.add(26);
     this.configs.forEach((cfg: SourceConfig, type: number) => {
       protectedTypes.add(type);
     });
@@ -372,10 +372,9 @@ export class SourceManager {
     return false;
   }
 
-  /** 内置源默认定义（首启种子数据）：仅包子漫画默认启用；拷贝漫画停用种子保证发现页可见可开。 */
+  /** 内置源默认定义（首启种子数据）：仅包子漫画默认启用。 */
   defaultSources(): SourceInfo[] {
     return [
-      new SourceInfo(0, '拷贝漫画', 26, false),
       new SourceInfo(0, '包子漫画', 200, true),
     ];
   }
@@ -386,11 +385,11 @@ export class SourceManager {
       return cached;
     }
     let parser: Parser | null = null;
-    if (type === 26) {
-      parser = new CopyMangaParser();
-    } else {
-      const config = this.configs.get(type);
-      if (config !== undefined) {
+    const config = this.configs.get(type);
+    if (config !== undefined) {
+      if (config.parserKind === 'dm5-fun' || config.parserKind === 'dm5-eval') {
+        parser = new Dm5Parser(config, config.parserKind === 'dm5-fun');
+      } else {
         parser = new GenericHtmlParser(config);
       }
     }
@@ -398,6 +397,12 @@ export class SourceManager {
       this.parserCache.set(type, parser);
     }
     return parser;
+  }
+
+  /** 源配置只读访问（源站浏览器取 baseUrl/key 等展示与识别信息用；不触碰解析与合并链路）。 */
+  getConfig(type: number): SourceConfig | null {
+    const cfg = this.configs.get(type);
+    return cfg !== undefined ? cfg : null;
   }
 
   clearParserCache(): void {

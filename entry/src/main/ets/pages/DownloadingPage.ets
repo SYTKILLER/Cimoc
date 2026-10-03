@@ -5,6 +5,7 @@ import { Comic, Task } from '../model/Model';
 import { ComicDao } from '../data/Daos';
 import { DownloadManager } from '../download/DownloadManager';
 import Theme from '../common/Theme';
+import { PageTitleBar } from '../common/PageTitleBar';
 import { promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 
@@ -117,6 +118,7 @@ export struct DownloadingPage {
   // DownloadManager 每页进度/队列变化都会置脏；reload 原地合并，行不重建
   @StorageLink('download_dirty') @Watch('onDirty') dirty: number = 0;
   private comicDao: ComicDao | null = null;
+  private pathStack: NavPathStack | null = null;
 
   onDirty(): void {
     this.reload();
@@ -270,6 +272,15 @@ export struct DownloadingPage {
   build() {
     NavDestination() {
       Column() {
+        // 自定义标题栏：内置标题栏在真机全屏下不避让状态栏（模拟器由 HDS 桥接兜底）
+        PageTitleBar({
+          title: '下载中',
+          onBack: (): void => {
+            if (this.pathStack !== null) {
+              this.pathStack.pop(true);
+            }
+          }
+        })
         if (this.doingTasks.length === 0 && this.doneTasks.length === 0) {
           this.emptyState()
         } else {
@@ -310,7 +321,11 @@ export struct DownloadingPage {
       .width('100%')
       .height('100%')
     }
-    .title('下载中')
+    .hideTitleBar(true)
     .backgroundColor($r('sys.color.background_primary'))
+    .onReady((ctx: NavDestinationContext) => {
+      // Navigation 标准入口：ctx.pathStack 拿导航控制器（标题栏返回键用）
+      this.pathStack = ctx.pathStack;
+    })
   }
 }

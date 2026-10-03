@@ -15,6 +15,22 @@
       "data": {
         "description": "本地漫画：已缓存章节列表，离线阅读与删除"
       }
+    },
+    {
+      "name": "searchresult",
+      "pageSourceFile": "src/main/ets/pages/SearchResultPage.ets",
+      "buildFunction": "SearchResultPageBuilder",
+      "data": {
+        "description": "二级搜索：多源聚合搜索结果，半模态面板勾选搜索源"
+      }
+    },
+    {
+      "name": "sourcebrowser",
+      "pageSourceFile": "src/main/ets/pages/SourceBrowserPage.ets",
+      "buildFunction": "SourceBrowserPageBuilder",
+      "data": {
+        "description": "源站浏览器：ArkWeb 打开源站首页，主框架命中详情页 URL 时拦截跳原生详情页"
+      }
     }
   ]
 }

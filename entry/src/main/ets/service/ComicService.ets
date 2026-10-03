@@ -14,6 +14,8 @@ export class SourceResult {
   readonly title: string;
   comics: Comic[] = [];
   error: string;
+  /** 源站结果已按相关度排序（searchRanked 源），聚合本地排序时保序。 */
+  ranked: boolean = false;
 
   constructor(type: number, title: string) {
     this.type = type;
@@ -62,6 +64,7 @@ export class ComicService {
       result.error = 'parser not found';
       return result;
     }
+    result.ranked = parser.isSearchRanked();
     try {
       const request = parser.getSearchRequest(keyword, page);
       if (request === null) {
