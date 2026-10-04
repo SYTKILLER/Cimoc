@@ -39,6 +39,8 @@ export class SourceConfig {
   readonly parseImageUrl: string;
   readonly parseImageFaultImage: string;
   readonly parseImagePages: string;
+  /** 图片去重策略（"basename"：按文件名折叠镜像重复，保首个）；空=不去重。 */
+  readonly parseImageDedup: string;
   readonly imageServerUrl: string;
   /** 站点目录新话在前（如瓜子漫画），解析后需反转再入库。 */
   readonly chapterReverse: boolean;
@@ -80,6 +82,7 @@ export class SourceConfig {
     this.parseImageFaultImage = obj.optString('parseImageFaultImage');
     // 多页拼接模板（如包子漫画 "%s_%d.html"）：源站把一章拆成每页 N 张图片
     this.parseImagePages = obj.optString('parseImagePages');
+    this.parseImageDedup = obj.optString('parseImageDedup');
     const isu = obj.optString('imageServerUrl');
     this.imageServerUrl = isu.length > 0 ? isu : this.serverUrl;
     this.chapterReverse = obj.optString('chapterReverse') === 'true';
@@ -364,7 +367,50 @@ export class GenericHtmlParser extends Parser {
     } else {
       this.parseCssImages(html, chapter, list);
     }
+    if (this.config.parseImageDedup === 'basename') {
+      return this.dedupeByBasename(list);
+    }
     return list;
+  }
+
+  /**
+   * 镜像重复折叠（瓜子漫画）：站点个别章节会把同一页从两个 CDN 目录各输出一份
+   * <img class="reading-image">（目录不同、文件名相同、内容逐字节相同），
+   * 按文件名（URL 末段）去重保首个并重排 num；文件名为空的不参与折叠。
+   */
+  private dedupeByBasename(list: ImageInfo[]): ImageInfo[] {
+    if (list.length < 2) {
+      return list;
+    }
+    const seen: Set<string> = new Set();
+    const out: ImageInfo[] = [];
+    for (const img of list) {
+      const name = GenericHtmlParser.basename(img.url());
+      if (name.length > 0 && seen.has(name)) {
+        continue;
+      }
+      if (name.length > 0) {
+        seen.add(name);
+      }
+      out.push(img);
+    }
+    if (out.length === list.length) {
+      return list;
+    }
+    for (let i = 0; i < out.length; i++) {
+      out[i].num = i + 1;
+    }
+    return out;
+  }
+
+  private static basename(url: string): string {
+    let u = url.trim();
+    const cut = u.search(/[?#]/);
+    if (cut >= 0) {
+      u = u.substring(0, cut);
+    }
+    const slash = u.lastIndexOf('/');
+    return slash >= 0 ? u.substring(slash + 1) : u;
   }
 
   private parseCssImages(html: string, chapter: Chapter, list: ImageInfo[]): void {

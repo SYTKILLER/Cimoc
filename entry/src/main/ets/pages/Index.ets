@@ -9,9 +9,12 @@ import { DetailPage } from './DetailPage';
 import { ReaderPage } from './ReaderPage';
 import { SymbolGlyphModifier, window, curves } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { HdsTabs, HdsTabsController, hdsMaterial } from '@kit.UIDesignKit';
 import { motion } from '@kit.MultimodalAwarenessKit';
 import { HoldingHandleUtil } from '../common/HoldingHandleUtil';
+import { ComicDao, ChapterDao } from '../data/Daos';
+import { ReaderArgs } from '../model/Model';
 
 interface TabItem {
   title: string;
@@ -35,6 +38,8 @@ struct Index {
   // 活动页签写入 AppStorage（'active_tab'）：TabContent 组件常驻不重建，
   // 各页签页靠 @StorageLink @Watch 感知"自己重新可见"以便每次进入都重载最新数据
   @StorageLink('active_tab') activeTab: number = 0;
+  // 桌面「继续阅读」卡片深跳意图（EntryAbility 写入 comicId，0=无）：消费即清零防重复导航
+  @StorageProp('pending_reader_intent') @Watch('onPendingIntent') pendingIntent: number = 0;
   private tabsController: HdsTabsController = new HdsTabsController();
   // 待生效的换边定时器（-1 表示无）
   private holdDebounceTimer: number = -1;
@@ -49,6 +54,8 @@ struct Index {
 
   aboutToAppear(): void {
     this.tabsController.changeIndex(this.activeTab);
+    // 冷启动携带卡片深跳意图时 AppStorage 已先于本页写入（@Watch 不会触发），延后一拍等 Navigation 挂载再消费
+    setTimeout(() => this.consumePendingIntent(), 0);
     // 智感握姿：订阅系统左右手握持事件（不支持的设备内部静默降级，按钮停在默认右下）
     HoldingHandleUtil.start((status: motion.HoldingHandStatus) => {
       this.handleHoldingStatusChange(status);
@@ -60,6 +67,51 @@ struct Index {
       this.readBreakpoint(w);
       w.on('avoidAreaChange', (): void => this.readInsets(w));
       w.on('windowSizeChange', (): void => this.readBreakpoint(w));
+    });
+  }
+
+  private onPendingIntent(): void {
+    this.consumePendingIntent();
+  }
+
+  /** 消费卡片深跳意图：查库重建 ReaderArgs 直达阅读器（ReaderPage 按 comic.last/page 自动恢复页码）。 */
+  private consumePendingIntent(): void {
+    const id = AppStorage.get<number>('pending_reader_intent');
+    if (id === undefined || id <= 0) {
+      return;
+    }
+    AppStorage.setOrCreate('pending_reader_intent', 0);
+    const names = this.navStack.getAllPathName();
+    if (names.length > 0 && names[names.length - 1] === 'reader') {
+      return; // 已在阅读器，不重复压栈
+    }
+    const ctx = getContext(this) as common.UIAbilityContext;
+    new ComicDao(ctx).loadById(id).then((comic) => {
+      if (comic === null) {
+        return; // 漫画已删除：静默停在首页
+      }
+      if (comic.last.length === 0) {
+        this.navStack.pushPathByName('detail', comic);
+        return;
+      }
+      return new ChapterDao(ctx).list(comic.id).then((chapters) => {
+        if (chapters.length === 0) {
+          // 无章节记录（如仅收藏未打开过详情）：退回详情页拉取
+          this.navStack.pushPathByName('detail', comic);
+          return;
+        }
+        // 对齐 DetailPage.continueReading：记录章节已不存在时回退第一章
+        let index = 0;
+        for (let i = 0; i < chapters.length; i++) {
+          if (chapters[i].path === comic.last) {
+            index = i;
+            break;
+          }
+        }
+        this.navStack.pushPathByName('reader', new ReaderArgs(comic, chapters, index));
+      });
+    }).catch((e: Object) => {
+      hilog.error(0x0000, 'Cimoc', 'card intent navigate failed: %{public}s', String(e));
     });
   }
 

@@ -6,73 +6,24 @@ import { ComicDao } from '../data/Daos';
 import Theme from '../common/Theme';
 import { common } from '@kit.AbilityKit';
 
+/**
+ * 收藏/历史网格面板：列表必须走子组件 @Prop 状态绑定。
+ * 不能用 @Builder 传数组——@Builder 参数是普通值，构建一次后永不更新
+ * （收藏/取消收藏后网格不刷新、删后台重进才恢复的根因）；
+ * @Prop 由父组件状态同步，favComics/histComics 每次变化都会驱动本组件重渲染。
+ */
 @Component
-export struct LibraryPage {
+struct ComicGridPanel {
   @Consume('nav') navStack: NavPathStack;
-  @StorageLink('bottomInset') bottomInset: number = 0;
   @StorageLink('bp') bp: string = 'sm';
-  @State tab: number = 0;
-  @State favComics: Comic[] = [];
-  @State histComics: Comic[] = [];
-  // 收藏/进度等数据在详情页、阅读器中变更时置脏，本页无论是否可见都立即重载
-  @StorageLink('library_dirty') @Watch('onDirty') dirty: number = 0;
-  // 底部页签切回"书库"时本组件不会重建（TabContent 常驻），靠 active_tab 感知重新可见并重载
-  @StorageLink('active_tab') @Watch('onTabEntered') activeTab: number = 0;
-  private comicDao: ComicDao | null = null;
-  private swiperController: SwiperController = new SwiperController();
-
-  onDirty(): void {
-    this.reload();
-  }
-
-  onTabEntered(): void {
-    if (this.activeTab === 0) {
-      this.reload();
-    }
-  }
-
-  aboutToAppear(): void {
-    this.comicDao = new ComicDao(getContext(this) as common.UIAbilityContext);
-    this.reload();
-  }
-
-  reload(): void {
-    const dao = this.comicDao;
-    if (dao === null) {
-      return;
-    }
-    dao.listFavorite().then((list: Comic[]) => {
-      this.favComics = list;
-    }).catch(() => {
-      this.favComics = [];
-    });
-    dao.listHistory().then((list: Comic[]) => {
-      this.histComics = list;
-    }).catch(() => {
-      this.histComics = [];
-    });
-  }
+  @StorageLink('bottomInset') bottomInset: number = 0;
+  @Prop comics: Comic[] = [];
+  @Prop prefix: string = '';
 
   openDetail(comic: Comic): void {
     const c = new Comic(comic.source, comic.cid, comic.title, comic.cover, comic.update, comic.author);
     c.id = comic.id;
     this.navStack.pushPathByName('detail', c);
-  }
-
-  @Builder
-  emptyState(icon: Resource, message: string) {
-    Column({ space: 12 }) {
-      SymbolGlyph(icon)
-        .fontSize(52)
-        .fontColor([$r('sys.color.font_fourth')])
-      Text(message)
-        .fontSize(14)
-        .fontColor($r('sys.color.font_secondary'))
-        .textAlign(TextAlign.Center)
-    }
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
-    .width('100%')
   }
 
   @Builder
@@ -123,11 +74,10 @@ export struct LibraryPage {
     })
   }
 
-  @Builder
-  comicGrid(comics: Comic[], keyPrefix: string) {
+  build() {
     Scroll() {
       Grid() {
-        ForEach(comics, (c: Comic) => {
+        ForEach(this.comics, (c: Comic) => {
           GridItem() {
             this.comicCell(c)
           }
@@ -135,7 +85,7 @@ export struct LibraryPage {
             pressed: { .opacity(Theme.PRESS_OPACITY) },
             normal: { .opacity(1) }
           })
-        }, (c: Comic) => `${keyPrefix}_${c.id}_${c.highlight ? 'h' : 'n'}_${c.chapter}_${c.page}_${c.history}`)
+        }, (c: Comic) => `${this.prefix}_${c.id}_${c.highlight ? 'h' : 'n'}_${c.chapter}_${c.page}_${c.history}`)
       }
       .columnsTemplate(Theme.coverCols(this.bp))
       .columnsGap(10)
@@ -146,6 +96,85 @@ export struct LibraryPage {
     .edgeEffect(EdgeEffect.Spring)
     .width('100%')
     .contentEndOffset(Theme.floatTabBarAvoid(this.bottomInset))
+  }
+}
+
+@Component
+export struct LibraryPage {
+  @Consume('nav') navStack: NavPathStack;
+  @StorageLink('bottomInset') bottomInset: number = 0;
+  @StorageLink('bp') bp: string = 'sm';
+  @State tab: number = 0;
+  @State favComics: Comic[] = [];
+  @State histComics: Comic[] = [];
+  // 收藏/进度等数据在详情页、阅读器中变更时置脏，本页无论是否可见都立即重载
+  @StorageLink('library_dirty') @Watch('onDirty') dirty: number = 0;
+  // 底部页签切回"书库"时本组件不会重建（TabContent 常驻），靠 active_tab 感知重新可见并重载
+  @StorageLink('active_tab') @Watch('onTabEntered') activeTab: number = 0;
+  private comicDao: ComicDao | null = null;
+  private swiperController: SwiperController = new SwiperController();
+
+  onDirty(): void {
+    this.reload();
+  }
+
+  onTabEntered(): void {
+    if (this.activeTab === 0) {
+      this.reload();
+    }
+  }
+
+  aboutToAppear(): void {
+    this.comicDao = new ComicDao(getContext(this) as common.UIAbilityContext);
+    this.reload();
+  }
+
+  /** 兜底刷新：本页重新可见即重载（详情页/阅读器返回、页签切回），与置脏通知互为冗余。 */
+  private onVisible(isExpanding: boolean): void {
+    if (isExpanding) {
+      this.reload();
+    }
+  }
+
+  reload(): void {
+    const dao = this.comicDao;
+    if (dao === null) {
+      return;
+    }
+    dao.listFavorite().then((list: Comic[]) => {
+      LibraryPage.resetArray(this.favComics, list);
+    }).catch(() => {
+      LibraryPage.resetArray(this.favComics, []);
+    });
+    dao.listHistory().then((list: Comic[]) => {
+      LibraryPage.resetArray(this.histComics, list);
+    }).catch(() => {
+      LibraryPage.resetArray(this.histComics, []);
+    });
+  }
+
+  /** 就地重置数组：splice/push 是 V1 状态管理的观察方法，保证数组变化始终可被观察。 */
+  private static resetArray(target: Comic[], source: Comic[]): void {
+    target.splice(0, target.length);
+    for (const c of source) {
+      target.push(c);
+    }
+  }
+
+  @Builder
+  emptyState(icon: Resource, message: string) {
+    Column({ space: 12 }) {
+      SymbolGlyph(icon)
+        .fontSize(52)
+        .fontColor([$r('sys.color.font_fourth')])
+      Text(message)
+        .fontSize(14)
+        .fontColor($r('sys.color.font_secondary'))
+        .textAlign(TextAlign.Center)
+    }
+    .layoutWeight(1)
+    .justifyContent(FlexAlign.Center)
+    .width('100%')
   }
 
   build() {
@@ -189,7 +218,8 @@ export struct LibraryPage {
           if (this.favComics.length === 0) {
             this.emptyState($r('sys.symbol.heart'), '还没有收藏的漫画\n去搜索页找一本吧')
           } else {
-            this.comicGrid(this.favComics, 'fav')
+            // 列表经子组件 @Prop 传入（@Builder 传数组不会随状态刷新，见 ComicGridPanel 注释）
+            ComicGridPanel({ comics: this.favComics, prefix: 'fav' })
           }
         }
         .width('100%')
@@ -200,7 +230,7 @@ export struct LibraryPage {
           if (this.histComics.length === 0) {
             this.emptyState($r('sys.symbol.clock'), '暂无阅读记录')
           } else {
-            this.comicGrid(this.histComics, 'hist')
+            ComicGridPanel({ comics: this.histComics, prefix: 'hist' })
           }
         }
         .width('100%')
@@ -222,5 +252,8 @@ export struct LibraryPage {
     }
     .height('100%')
     .width('100%')
+    .onVisibleAreaChange([0.9, 1.0], (isExpanding: boolean, ratio: number) => {
+      this.onVisible(isExpanding);
+    })
   }
 }

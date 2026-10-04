@@ -54,6 +54,7 @@
     "parseChapterPath": "a",
     "parseImageList": "img.reading-image",
     "parseImageUrl": "src",
+    "parseImageDedup": "basename",
     "chapterReverse": "true"
   },
   "HAOMAN6": {

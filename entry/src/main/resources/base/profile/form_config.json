@@ -1,0 +1,23 @@
+{
+  "forms": [
+    {
+      "name": "ContinueReadingCard",
+      "displayName": "$string:widget_display_name",
+      "description": "$string:widget_desc",
+      "src": "./ets/widget/pages/WidgetCard.ets",
+      "uiSyntax": "arkts",
+      "window": {
+        "designWidth": 720,
+        "autoDesignWidth": true
+      },
+      "isDefault": true,
+      "updateEnabled": true,
+      "updateDuration": 0,
+      "defaultDimension": "2*2",
+      "supportDimensions": [
+        "2*2"
+      ],
+      "isDynamic": true
+    }
+  ]
+}

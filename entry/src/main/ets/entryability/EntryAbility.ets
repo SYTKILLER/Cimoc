@@ -3,7 +3,9 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { webview } from '@kit.ArkWeb';
+import { formProvider } from '@kit.FormKit';
 import { AppBootstrap } from '../app/AppBootstrap';
+import { CardDataProvider } from '../form/CardDataProvider';
 
 const DOMAIN = 0x0000;
 
@@ -22,6 +24,43 @@ export default class EntryAbility extends UIAbility {
     AppBootstrap.init(this.context).then(() => {
       hilog.info(DOMAIN, 'Cimoc', 'bootstrap done');
     });
+    // 桌面卡片 router 事件（冷启动）：comicId 写入 AppStorage，Index 就绪后消费
+    this.handleCardIntent(want);
+  }
+
+  /** 热启动：应用存活于后台时卡片 router 事件走这里，Index 存活靠 AppStorage @Watch 直达阅读器。 */
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    hilog.info(DOMAIN, 'Cimoc', 'onNewWant');
+    this.handleCardIntent(want);
+  }
+
+  /** 卡片 router 事件参数：want.parameters.params 为 postCardAction params 的 JSON 字符串。 */
+  private handleCardIntent(want: Want): void {
+    try {
+      const params = want.parameters;
+      if (!params) {
+        return;
+      }
+      let comicId = 0;
+      const raw = params['params'];
+      if (typeof raw === 'string' && raw.length > 0) {
+        const p: Record<string, Object> = JSON.parse(raw) as Record<string, Object>;
+        const v = p['comicId'];
+        if (typeof v === 'number') {
+          comicId = v as number;
+        }
+      } else {
+        const direct = params['comicId'];
+        if (typeof direct === 'number') {
+          comicId = direct as number;
+        }
+      }
+      if (comicId > 0) {
+        AppStorage.setOrCreate('pending_reader_intent', comicId);
+      }
+    } catch (e) {
+      hilog.error(DOMAIN, 'Cimoc', 'card intent parse failed: %{public}s', String(e));
+    }
   }
 
   onDestroy(): void {
@@ -103,5 +142,16 @@ export default class EntryAbility extends UIAbility {
   onBackground(): void {
     // Ability has back to background
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onBackground');
+    // 「继续阅读」卡片以退出前台为唯一刷新时钟（updateDuration=0，系统不定时唤醒）：
+    // 阅读进度在翻页/退出阅读器时已实时落库，此刻 DB 必为最新。
+    // reloadAllForms（API 22+，仅 UIAbility 可调）批量触发卡片进程 onUpdateForm；失败走自存 formId 直刷兜底
+    formProvider.reloadAllForms(this.context).then((count: number) => {
+      hilog.info(DOMAIN, 'Cimoc', 'reloadAllForms: %{public}d', count);
+    }).catch((e: BusinessError) => {
+      hilog.error(DOMAIN, 'Cimoc', 'reloadAllForms failed: %{public}s', JSON.stringify(e));
+      CardDataProvider.flushAll(this.context).catch((err: Object) => {
+        hilog.error(DOMAIN, 'Cimoc', 'card flush fallback failed: %{public}s', String(err));
+      });
+    });
   }
 }

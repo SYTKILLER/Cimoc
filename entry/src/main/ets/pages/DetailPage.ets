@@ -10,7 +10,6 @@ import { PageTitleBar } from '../common/PageTitleBar';
 import { shareComicText } from '../common/ShareUtil';
 import { promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
-import { hdsEffect } from '@kit.UIDesignKit';
 
 @Component
 export struct DetailPage {
@@ -213,6 +212,8 @@ export struct DetailPage {
    * 换边动画由 Index 统一驱动，此处零动画代码；图标直接读 @State 保证收藏态随状态刷新。
    * 底色用系统毛玻璃材质（浅色下呈浅色磨砂、深色下呈深色磨砂），与返回键圆钮同款；
    * 图标/分隔线用 sys.color 自适应资源，浅色模式下不再是深色块。
+   * 不用 pointLight 外发光：真机深色模式下光晕随换边重渲染闪烁（2026-10-04 真机确认），
+   * 改为胶囊内静态顶缘光泽 + 细描边——渲染走普通图层路径，稳定且保证两种模式可读性。
    */
   @Builder
   gripSideButton() {
@@ -271,18 +272,18 @@ export struct DetailPage {
     .borderRadius(30)
     .backgroundBlurStyle(BlurStyle.Thin)
     .backgroundColor('#33000000')
+    // 「光在胶囊内」：顶缘 12% 白光泽渐隐，深色下提供内部层次、浅色下近隐形；
+    // 细描边把胶囊从深浅背景上托起。均为静态属性，换边移动时不会重建闪烁
+    .linearGradient({
+      angle: 180,
+      colors: [['#1FFFFFFF', 0], ['#00FFFFFF', 0.4]]
+    })
+    .border(Theme.BORDER_HAIRLINE)
     // 贴边一侧内收 PAD_PAGE：BottomEnd 对齐时负 x 向屏内推，换到 BottomStart 后对称
     .offset({
       x: this.btnPos === 0 ? -Theme.PAD_PAGE : Theme.PAD_PAGE,
       y: -this.winHVp * 0.3
     })
-    // 智感光效：标识「会随握姿换边的活按钮」；收藏态靠心形颜色 + 底色高亮区分
-    .visualEffect(new hdsEffect.HdsEffectBuilder()
-      .pointLight({
-        sourceType: hdsEffect.PointLightSourceType.BRIGHT,
-        illuminatedType: hdsEffect.PointLightIlluminatedType.DEFAULT_FEATHERING_BORDER
-      })
-      .buildEffect())
   }
 
   // 缓存选择半模态面板：内容直接读 this.* 状态（@Builder 按值参数不会随状态刷新）。

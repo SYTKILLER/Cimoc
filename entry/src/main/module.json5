@@ -53,18 +53,31 @@
       }
     ],
     "extensionAbilities": [
-      {
-        "name": "EntryBackupAbility",
-        "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",
-        "type": "backup",
-        "exported": false,
-        "metadata": [
-          {
-            "name": "ohos.extension.backup",
-            "resource": "$profile:backup_config"
-          }
-        ],
-      }
-    ]
+    {
+      "name": "EntryBackupAbility",
+      "srcEntry": "./ets/entrybackupability/EntryBackupAbility.ets",
+      "type": "backup",
+      "exported": false,
+      "metadata": [
+        {
+          "name": "ohos.extension.backup",
+          "resource": "$profile:backup_config"
+        }
+      ],
+    },
+    {
+      "name": "EntryFormAbility",
+      "srcEntry": "./ets/entryformability/EntryFormAbility.ets",
+      "label": "$string:EntryFormAbility_label",
+      "description": "$string:widget_desc",
+      "type": "form",
+      "metadata": [
+        {
+          "name": "ohos.extension.form",
+          "resource": "$profile:form_config"
+        }
+      ],
+    }
+  ]
   }
 }
