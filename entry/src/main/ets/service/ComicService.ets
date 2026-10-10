@@ -197,6 +197,9 @@ export class ComicService {
    * 在线解析章节图片列表（含分页拼接、跨页去重、入库）。
    * 下载任务专用入口：不做离线/缓存表回退——部分旧任务/旧缓存只有第一分页的 50 张，
    * 回退会让下载永远停在 50 张；这里强制拿全量真值。
+   *
+   * 失败语义：任一环节失败只保留已抓部分，且 COMPLETE 落 false（不把截断结果
+   * 伪装成完整章节）；站点越界分页会重发已有页（有图全重复）视为正常结束。
    */
   async parseImagesOnline(comic: Comic, chapter: Chapter): Promise<ImageInfo[]> {
     const parser = SourceManager.get().getParser(comic.source);
@@ -207,7 +210,13 @@ export class ComicService {
     if (request === null) {
       return [];
     }
-    const html = await this.executeText(request);
+    let html: string;
+    try {
+      html = await this.executeText(request);
+    } catch (e) {
+      // 首页瞬时失败（弱网/降级链路实测超时后立即重发多半可恢复），重试一次
+      html = await this.executeText(request);
+    }
     let images = parser.parseImages(html, chapter);
     if (images === null || images.length === 0) {
       images = [];
@@ -215,8 +224,10 @@ export class ComicService {
     // 多页拼接：配置了 parseImagePages 的源会把一章拆成每页 N 张图，
     // 后续页可能与前页尾部重叠，按图片路径去重后顺序追加，直到没有新图。
     // 按窗口并行抓取（仅当整个窗口都 0 新图才停），与逐页串行语义等价：
-    // 按页号序合并去重、任一页失败即停保留已抓部分；停止窗口多抓的越界页
-    // 只会重发末页内容（全部重复），不引入新图，代价是多几个请求。
+    // 按页号序合并去重；失败页立即串行重试一次——真机上站点连接可能被降级为
+    // 近似串行，窗口内排队请求的排队时间计入读超时会成批误杀，单独重发即可恢复。
+    // 停止窗口多抓的越界页只会重发末页/首页内容（有图但全重复），不引入新图。
+    let sawFailure = false;
     if (images.length > 0 && parser.nextImagesRequest(comic.cid, chapter.path, 2) !== null) {
       const seen = new Set<string>();
       for (const img of images) {
@@ -238,21 +249,22 @@ export class ComicService {
         }
         const results: Array<ImageInfo[] | null> =
           await Promise.all(requests.map(async (req: ParserRequest): Promise<ImageInfo[] | null> => {
-            try {
-              const pageHtml = await this.executeText(req);
-              const parsed = parser.parseImages(pageHtml, chapter);
-              return parsed !== null ? parsed : [];
-            } catch (e) {
-              return null;
-            }
+            return this.fetchImagesPage(parser, chapter, req);
           }));
+        for (let i = 0; i < results.length; i++) {
+          if (results[i] === null) {
+            results[i] = await this.fetchImagesPage(parser, chapter, requests[i]);
+          }
+        }
         let windowFresh = 0;
+        let windowParsed = 0;
         let failed = false;
         for (const pageImages of results) {
           if (pageImages === null) {
             failed = true;
             break;
           }
+          windowParsed += pageImages.length;
           let num = images.length;
           for (const img of pageImages) {
             const key = ComicService.imageKey(img.url());
@@ -265,17 +277,36 @@ export class ComicService {
             images.push(new ImageInfo(0, chapter.id, num, img.url(), img.lazy));
           }
         }
-        // 窗口整体无新图（越界重发末页）或任一页失败：章节结束/保留已抓部分
-        if (failed || windowFresh === 0) {
+        if (failed) {
+          sawFailure = true;
+          break;
+        }
+        // 整窗 0 新图：越界（重发页有图）→ 正常结束；整窗连图都解析不出
+        // （反爬/挑战/错误页）→ 异常截断，标记未完成
+        if (windowFresh === 0) {
+          if (windowParsed === 0) {
+            sawFailure = true;
+          }
           break;
         }
       }
     }
     await this.imageDao.insertOrReplaceAll(chapter.id, images);
     chapter.count = images.length;
-    chapter.complete = true;
+    chapter.complete = !sawFailure && images.length > 0;
     await this.chapterDao.updateCount(chapter);
     return images;
+  }
+
+  /** 抓取并解析单个分页；失败返回 null（不抛出），由调用方决定重试/终止。 */
+  private async fetchImagesPage(parser: Parser, chapter: Chapter, req: ParserRequest): Promise<ImageInfo[] | null> {
+    try {
+      const pageHtml = await this.executeText(req);
+      const parsed = parser.parseImages(pageHtml, chapter);
+      return parsed !== null ? parsed : [];
+    } catch (e) {
+      return null;
+    }
   }
 
   /** 图片身份：去 scheme/host（分页间 CDN 域名可能不同）与缓存参数后的路径。 */
