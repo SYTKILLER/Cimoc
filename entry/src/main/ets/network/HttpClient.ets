@@ -75,7 +75,9 @@ export interface RawResponse {
 const DEFAULT_UA: string =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const CONNECT_TIMEOUT_MS = 15000;
-const READ_TIMEOUT_MS = 20000;
+// 慢传输链路（如包子漫画 TCP 路径被按字节限速）下大页面可能传输 20s+，
+// 读超时过短会把可完成的传输掐断成整页失败重来，连接阶段不受此影响
+const READ_TIMEOUT_MS = 45000;
 
 export class HttpClient {
   /** 单例。 */

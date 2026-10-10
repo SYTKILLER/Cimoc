@@ -2,9 +2,9 @@
   "app": {
     "bundleName": "com.march.cimoc",
     "vendor": "example",
-    "versionCode": 1040001,
-    "versionName": "1.4.1",
-    "buildVersion": "4",
+    "versionCode": 1040002,
+    "versionName": "1.4.2",
+    "buildVersion": "5",
     "icon": "$media:layered_image",
     "label": "$string:app_name"
   }

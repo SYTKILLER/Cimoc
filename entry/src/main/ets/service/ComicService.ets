@@ -213,40 +213,60 @@ export class ComicService {
       images = [];
     }
     // 多页拼接：配置了 parseImagePages 的源会把一章拆成每页 N 张图，
-    // 后续页可能与前页尾部重叠，按图片路径去重后顺序追加，直到没有新图
+    // 后续页可能与前页尾部重叠，按图片路径去重后顺序追加，直到没有新图。
+    // 按窗口并行抓取（仅当整个窗口都 0 新图才停），与逐页串行语义等价：
+    // 按页号序合并去重、任一页失败即停保留已抓部分；停止窗口多抓的越界页
+    // 只会重发末页内容（全部重复），不引入新图，代价是多几个请求。
     if (images.length > 0 && parser.nextImagesRequest(comic.cid, chapter.path, 2) !== null) {
       const seen = new Set<string>();
       for (const img of images) {
         seen.add(ComicService.imageKey(img.url()));
       }
       const MAX_IMAGE_PAGES = 30;
-      for (let page = 2; page <= MAX_IMAGE_PAGES; page++) {
-        const nextReq = parser.nextImagesRequest(comic.cid, chapter.path, page);
-        if (nextReq === null) {
-          break;
-        }
-        let pageImages: ImageInfo[] = [];
-        try {
-          const pageHtml = await this.executeText(nextReq);
-          const parsed = parser.parseImages(pageHtml, chapter);
-          pageImages = parsed !== null ? parsed : [];
-        } catch (e) {
-          break;
-        }
-        let num = images.length;
-        let fresh = 0;
-        for (const img of pageImages) {
-          const key = ComicService.imageKey(img.url());
-          if (seen.has(key)) {
-            continue;
+      const PAGE_WINDOW = 4;
+      for (let base = 2; base <= MAX_IMAGE_PAGES; base += PAGE_WINDOW) {
+        const requests: ParserRequest[] = [];
+        for (let page = base; page < base + PAGE_WINDOW && page <= MAX_IMAGE_PAGES; page++) {
+          const nextReq = parser.nextImagesRequest(comic.cid, chapter.path, page);
+          if (nextReq === null) {
+            break;
           }
-          seen.add(key);
-          num++;
-          fresh++;
-          images.push(new ImageInfo(0, chapter.id, num, img.url(), img.lazy));
+          requests.push(nextReq);
         }
-        // 整页无新图：要么越界空页，要么与前一页完全重叠，视为章节结束
-        if (fresh === 0) {
+        if (requests.length === 0) {
+          break;
+        }
+        const results: Array<ImageInfo[] | null> =
+          await Promise.all(requests.map(async (req: ParserRequest): Promise<ImageInfo[] | null> => {
+            try {
+              const pageHtml = await this.executeText(req);
+              const parsed = parser.parseImages(pageHtml, chapter);
+              return parsed !== null ? parsed : [];
+            } catch (e) {
+              return null;
+            }
+          }));
+        let windowFresh = 0;
+        let failed = false;
+        for (const pageImages of results) {
+          if (pageImages === null) {
+            failed = true;
+            break;
+          }
+          let num = images.length;
+          for (const img of pageImages) {
+            const key = ComicService.imageKey(img.url());
+            if (seen.has(key)) {
+              continue;
+            }
+            seen.add(key);
+            num++;
+            windowFresh++;
+            images.push(new ImageInfo(0, chapter.id, num, img.url(), img.lazy));
+          }
+        }
+        // 窗口整体无新图（越界重发末页）或任一页失败：章节结束/保留已抓部分
+        if (failed || windowFresh === 0) {
           break;
         }
       }
